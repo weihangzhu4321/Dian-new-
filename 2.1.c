@@ -11,13 +11,13 @@ static int    line_count    = 0;       //行数
 static int cur_y = 0;             //行号 (0 .. line_count-1)
 static int cur_x = 0;             //列号 (0 .. strlen(line_content[cur_y]))
 static int top_row = 0;           //当前屏幕顶行对应第几个视觉行
+static int want_x = 0;            //即原本的屏幕列
 
 
 /*----------函数声明----------------*/
 int initial(void);                        //初始化ncurses
 int cursor(int max_y,int max_x);        //光标定位
 int editor(void);                     //主要实现，按光标位置滚动，排版，显示，并等待下一个
-void move_cursor(int ch);             //光标移动
 int add_line(const char *text, size_t len);   //把一行内容加在末尾，失败返回-1
 int load_file(const char *filename);  //读取文件，成功返回0，失败返回-1（errno已设置）
 void draw_document(int max_y, int max_x);     //打印文件内容，以top_row为顶行
@@ -25,8 +25,11 @@ int text_width(int max_x);                    //折行宽度
 int line_vrows(int line, int width);          //第line行占几个视觉行
 int visual_row(int y, int x, int width);      //文本(y,x)落在第几视觉行
 void locate(int vrow, int width, int *pty, int *ptx);   //第 vrow 个视觉行对应文本坐标
+void keep_top_line(int old_width, int new_width);  //改大小时顶行不跳
 void clamp_cursor(void);                      //光标在文本范围内
 void scroll_to_cursor(int rows, int width);  //光标滚动屏幕
+void move_cursor(int ch, int width);             //光标移动
+void cursor_to_fold(int line, int x0, int want);  //把光标放到某一折的第 want 列
 
 
 int main(int argc, char *argv[])      //加入命令行参数
@@ -82,9 +85,15 @@ int editor(void)   //主要实现，按光标位置滚动，排版，显示，�
 {
     int max_y, max_x;
     int ch;
+    int last_x = 0;
     
     while(1){   
         getmaxyx(stdscr, max_y, max_x); //获取屏幕大小
+        
+        if(last_x != 0 && max_x != last_x)
+          keep_top_line(text_width(last_x), text_width(max_x));
+        last_x = max_x;
+        
         scroll_to_cursor(max_y, text_width(max_x));  //走出屏幕就滚动
         draw_document(max_y, max_x);
         
@@ -92,49 +101,12 @@ int editor(void)   //主要实现，按光标位置滚动，排版，显示，�
         if(ch == 17 || ch == 3)   //17为Ctrl+Q的ASCII码，3为Ctrl+C的ASCII码（保险）
           break;
           
-        move_cursor(ch);                              //重新定位光标
+        move_cursor(ch, text_width(max_x));                      //重新定位光标
     }//while结束
     
     return 0;
 }
 
-void move_cursor(int ch)
-{
-    int len = (int)strlen(line_content[cur_y]);
-
-    switch (ch) {
-    case KEY_UP:                      //上一行（第一行再往上就不动了）
-        if (cur_y > 0) cur_y--;
-        break;
-
-    case KEY_DOWN:                    //下一行（最后一行再往下就不动了）
-        if (cur_y < line_count - 1) cur_y++;
-        break;
-
-    case KEY_LEFT:                    //左移；行首再往左就到上一行的行尾
-        if (cur_x > 0)
-            cur_x--;
-        else if (cur_y > 0) {
-            cur_y--;
-            cur_x = (int)strlen(line_content[cur_y]);
-        }
-        break;
-
-    case KEY_RIGHT:                   //右移；行尾再往右就到下一行的行首
-        if (cur_x < len)
-            cur_x++;
-        else if (cur_y < line_count - 1) {
-            cur_y++;
-            cur_x = 0;
-        }
-        break;
-
-    default:                          //这一阶段只处理方向键
-        break;
-    }
-
-    clamp_cursor();
-}
     
 int add_line(const char *text, size_t len)   //把一行内容加在末尾，失败返回-1
 {
@@ -189,7 +161,7 @@ int load_file(const char *filename)     //读取文件，成功返回0，失败�
         {
           cap *= 2;
           char *nbuf = realloc(buf, cap);
-          if(nbuf == NULL)    { errno = ENOMEM; break; }
+          if(nbuf == NULL)    { failed = -1; errno = ENOMEM; break; }
           buf = nbuf;
         }
         buf[len++] = (char)ch;      //字符添加
@@ -208,7 +180,8 @@ int load_file(const char *filename)     //读取文件，成功返回0，失败�
     
     if(line_count == 0)       //空文件，创建一行无内容
     {
-      if(add_line("", 0) != 0)   { free(buf); fclose(fp); return -1; }
+      if(add_line("", 0) != 0)   
+        return -1;
     }
       
     return 0;
@@ -289,6 +262,14 @@ void locate(int vrow, int width, int *pty, int *ptx)
     *ptx = vrow * width;         //每一折占 width 个字符
 }
 
+/*终端宽度改变时，原来处于屏幕顶行的文本依旧在顶行*/
+void keep_top_line(int old_width, int new_width)
+{
+    int ty, tx;
+    locate(top_row, old_width, &ty, &tx);       //原来顶行对应文本位置
+    top_row = visual_row(ty, tx, new_width);    //更新视觉行号
+}
+
 /*-------光标------------*/
 
 /*光标在文本范围内*/
@@ -329,3 +310,74 @@ void scroll_to_cursor(int rows, int width)
     if(top_row < 0)
       top_row = 0;
 }
+
+/*光标移动*/
+void move_cursor(int ch, int width)            
+{
+    int len = (int)strlen(line_content[cur_y]);
+    int fold = cur_x / width;     //光标在文本行第几折
+    int want = want_x;            //想去的屏幕列
+    
+    if(want > width - 1)          //窗口变窄后改变
+      want = width - 1;
+
+    switch (ch) {
+    case KEY_UP:                      //上一行
+        if (fold > 0)                 //同一条文本行的上一折
+          cursor_to_fold(cur_y, (fold - 1) * width, want);
+        else if(cur_y > 0)            //上一文本行的最后一折
+        {
+          int prev_len = (int)strlen(line_content[cur_y - 1]);
+          cursor_to_fold(cur_y - 1, prev_len / width * width, want);
+        }
+        break;
+
+    case KEY_DOWN:                    //下一行
+        if ((fold + 1) * width <= len)  //同一条文本行下一折
+          cursor_to_fold(cur_y, (fold + 1) * width, want);
+        else if(cur_y < line_count - 1) //下一行第一折
+          cursor_to_fold(cur_y + 1, 0, want);
+        break;
+
+    case KEY_LEFT:                    //左移；行首再往左就到上一行的行尾
+        if (cur_x > 0)
+            cur_x--;
+        else if (cur_y > 0) {
+            cur_y--;
+            cur_x = (int)strlen(line_content[cur_y]);
+        }
+        break;
+
+    case KEY_RIGHT:                   //右移；行尾再往右就到下一行的行首
+        if (cur_x < len)
+            cur_x++;
+        else if (cur_y < line_count - 1) {
+            cur_y++;
+            cur_x = 0;
+        }
+        break;
+
+    default:                          //这一阶段只处理方向键
+        break;
+    }
+
+    clamp_cursor();
+    
+    if(ch == KEY_LEFT || ch == KEY_RIGHT)     //左右移动更新 want_x
+      want_x = cur_x % width;
+}
+
+/*光标放在第 line 行，从 x0 开始的那一行里，屏幕第 want 列的位置
+  x0 必须是一折的起点， want 是想去的这内序号*/
+void cursor_to_fold(int line, int x0, int want)
+{
+    int len = (int)strlen(line_content[line]);
+    int rest = len - x0;      //该文本行剩余字符
+    
+    if(rest < 0)
+      rest = 0;
+    
+    cur_y = line;
+    cur_x = x0 + (want < rest ? want : rest);
+}
+
