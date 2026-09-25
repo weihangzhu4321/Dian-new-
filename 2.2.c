@@ -30,7 +30,7 @@ void clamp_cursor(void);                      //光标在文本范围内
 void scroll_to_cursor(int rows, int width);  //光标滚动屏幕
 void move_cursor(int ch, int width);             //光标移动
 void cursor_to_fold(int line, int x0, int want);  //把光标放到某一折的第 want 列
-void handle_key(int ch, int width);              //按键处理，编译或移动
+void handle_key(int ch, int width);              //按键处理，编辑或移动
 int insert_char(int ch, int width);              //在光标处插入一个字符
 int delete_char_before(int width);               //Backspace：删掉光标前面的字符
 int delete_char_after(int width);                //Del：删掉光标处的字符
@@ -109,7 +109,7 @@ int editor(void)   //主要实现，按光标位置滚动，排版，显示，�
         if(ch == 17 || ch == 3)   //17为Ctrl+Q的ASCII码，3为Ctrl+C的ASCII码（保险）
           break;
           
-        handle_key(ch, text_width(max_x));                      //编译或移动光标
+        handle_key(ch, text_width(max_x));                      //编辑或移动光标
     }//while结束
     
     return 0;
@@ -389,7 +389,7 @@ void cursor_to_fold(int line, int x0, int want)
     cur_x = x0 + (want < rest ? want : rest);
 }
 
-/*-------------编译文本---------------*/
+/*-------------编辑文本---------------*/
 
 /*把line行接到line-1行末尾，并删掉line行
   成功返回0, 失败返回1（errno已置位）*/
@@ -428,7 +428,7 @@ int split_line(int line, int cut)
     { free(tail); errno = ENOMEM; return -1;}
     line_content = temp;                          //文本总行数扩大
     
-    memmove(line_content + line + 2, line_content + 1,
+    memmove(line_content + line + 2, line_content + line + 1,
             (size_t)(line_count - line - 1) * sizeof(char*));   //后面的行后移
     line_content[line + 1] = tail;
     line_content[line][cut] = '\0';             //原行从cut处切断
@@ -520,13 +520,13 @@ int insert_newline(void)
   内存不足等问题在2.3中解决*/
 void handle_key(int ch, int width)
 {
-    if(ch == KEY_BACKSPACE)           //Backspace
+    if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)         //Backspace(有的终端发127,有的发8)
       delete_char_before(width);
     else if(ch == KEY_DC)             //Del
       delete_char_after(width);
     else if(ch == KEY_ENTER || ch == '\n' || ch == '\r')    //Enter
       insert_newline();
-    else if(ch >=32 && ch <= 256)     //可打印字符
+    else if(ch >=32 && ch < 256 && ch != 127)     //可打印字符
       insert_char(ch, width);
     else                              //方向键
       move_cursor(ch, width);
