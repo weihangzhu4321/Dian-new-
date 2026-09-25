@@ -8,8 +8,8 @@ static char **line_content = NULL;    //行内容
 static int    line_count   = 0;       //行数
 
 int initial();                        //初始化ncurses
-int cursor(int x,int y);              //光标定位
-int simpleprint(int ch,int x,int y);  //简单绘制
+int cursor(int y,int x);              //光标定位
+int simpleprint(int ch,int y,int x);  //简单绘制
 int add_line(const char *text, size_t len);   //把一行内容加在末尾，失败返回-1
 int load_file(const char *filename);  //读取文件，成功返回0，失败返回-1（errno已设置）
 void draw_document(int max_y, int max_x);     //打印文件内容
@@ -38,8 +38,8 @@ int main(int argc, char *argv[])      //加入命令行参数
     
     draw_document(max_y, max_x);      // 打印文件内容
     
-    cursor(x, y);           //初始为(0,0)     
-    simpleprint(ch, x, y);  //简单绘制
+    cursor(y, x);           //初始为(0,0)     
+    simpleprint(ch, y, x);  //简单绘制
     
     endwin();           //结束ncurses模式，恢复终端
     return 0;
@@ -56,14 +56,14 @@ int initial()                         //初始化ncurses
     return 0;
 }
 
-int cursor(int x,int y)       //光标定位
+int cursor(int y,int x)       //光标定位
 {
     move(y,x);            //(行，列）对应(y,x)
     refresh();            //显示
     return 0;
 }
 
-int simpleprint(int ch,int x,int y)   //简单绘制
+int simpleprint(int ch,int y,int x)   //简单绘制
 {
     int max_y, max_x;
     getmaxyx(stdscr, max_y, max_x); //获取初始屏幕大小
@@ -92,7 +92,7 @@ int simpleprint(int ch,int x,int y)   //简单绘制
             if (x < max_x - 2) x++;                //打印防越界
         }
         
-        cursor(x,y);                              //重新定位光标
+        cursor(y, x);                              //重新定位光标
     }//while结束
     
     return 0;
@@ -158,7 +158,7 @@ int load_file(const char *filename)         //读取文件，成功返回0，失
       }
   
     } //while结束
-    if(failed) { free(buf); fclose(fp); return -1; }    //审查
+    if(failed) { free(buf); fclose(fp); return -1; }    //写入成功审查
     
     if(len > 0)                  //文件最后一个字符不是换行时，最后一段写入
       add_line(buf, len);
@@ -175,7 +175,7 @@ int load_file(const char *filename)         //读取文件，成功返回0，失
 void draw_document(int max_y, int max_x)     //打印文件内容
 {
     int row;
-    int screen_y = 0; // 记录当前画到了屏幕的第几行
+    int screen_y = 0; // 记录当前画到了屏幕的第几行，以便超出时换行
 
     erase();
 
