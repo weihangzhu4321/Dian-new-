@@ -16,7 +16,7 @@ static int want_x = 0;            //即原本的屏幕列
 /*--------状态栏---------*/
 static const char *editor_state = "Normal";       //编辑器状态（这一节只有这一种，随便命名）
 static int modified = 0;                          //文件有无未保存修改
-
+static char message[80] = "";                     //状态栏提示信息
 
 /*----------函数声明----------------*/
 int initial(void);                        //初始化ncurses
@@ -26,6 +26,7 @@ int add_line(const char *text, size_t len);   //把一行内容加在末尾，�
 int load_file(const char *filename);  //读取文件，成功返回0，失败返回-1（errno已设置）
 void draw_document(int max_y, int max_x, const char *filename);   //打印文件内容，以top_row为顶行
 void draw_status(int max_y, int max_x, const char *filename);     //画状态栏
+void show_message(const char *text);                              //和状态栏一起显示
 int text_width(int max_x);                    //折行宽度
 int text_row(int max_y);                      //视觉行数，最后一行留给状态栏
 int line_vrows(int line, int width);          //第line行占几个视觉行
@@ -94,7 +95,7 @@ int editor(const char *filename)
           keep_top_line(text_width(last_x), text_width(max_x));
         last_x = max_x;
         
-        scroll_to_cursor(max_y, text_width(max_x));  //走出屏幕就滚动
+        scroll_to_cursor(text_row(max_y), text_width(max_x));  //走出屏幕就滚动
         draw_document(max_y, max_x, filename);
         
         ch = getch();
@@ -199,7 +200,7 @@ void draw_document(int max_y, int max_x, const char *filename)
     erase();
     locate(top_row, width, &y, &x);   //屏幕第一行对应文本位置
     
-    for(row_v = 0; row_v < max_y; row_v++)
+    for(row_v = 0; row_v < text_row(max_y); row_v++)
     {
       int len;
       
@@ -241,16 +242,25 @@ void draw_status(int max_y, int max_x, const char *filename)
       return;                   //屏幕太小，不放状态栏
     
     len = snprintf(buf, sizeof(buf), "%s | %s",
-                filename ? filename : "(无文件名)",  editor_state);   //n为前两个状态的字符长度
+                filename ? filename : "(无文件名)",  editor_state);   //len为前两个状态的字符长度
     if(modified && len > 0 && len < (int)sizeof(buf))       //有未保存的修改
       len += snprintf(buf + len, sizeof(buf) - (size_t)len, " | Modified");
     if(len > 0 && len < (int)sizeof(buf))                   //光标所在行列
-      snprintf(buf + len, sizeof(buf) - (size_t)len, " | %d:%d", 
+      len += snprintf(buf + len, sizeof(buf) - (size_t)len, " | %d:%d", 
                 cur_y + 1, cur_x + 1);      //暂时设为展示文本行列，而非屏幕行列（后有需求可更改）
+    if(len > 0 && len < (int)sizeof(buf) && message[0] != '\0') //有提示信息
+      snprintf(buf + len, sizeof(buf) - (size_t)len, " | %s", message);
     
     attron(A_REVERSE);            //反色显示，和正文区分开
+    mvhline(row, 0, ' ', max_x - 1);      //先把这一层铺满（最后一列依旧不写）
     mvaddnstr(row, 0, buf, max_x - 1);    //太长会被截掉
     attroff(A_REVERSE);
+}
+
+/*在状态栏上提示，按下任意键消失*/
+void show_message(const char *text)
+{
+    snprintf(message, sizeof(message), "%s", text ? text : "");
 }
 
 /*-----------折行：文本行与视觉行-------------*/
@@ -315,8 +325,8 @@ int cursor(int max_y,int max_x)
     
     if(row < 0)
       row = 0;
-    if(row > max_y - 1)
-      row = max_y -1;
+    if(row > text_row(max_y) - 1)
+      row = text_row(max_y) - 1;
       
     move(row, col);
     
@@ -566,17 +576,24 @@ int insert_newline(void)
 }
 
 /*输入按键处理，编辑或移动光标
-  内存不足等问题在2.3中解决*/
+  内存不足等问题在状态栏中显示*/
 void handle_key(int ch, int width)
 {
+    int ret = 0;
+    
+    message[0] = '\0';       //提示信息重置
+    
     if(ch == KEY_BACKSPACE || ch == 127 || ch == 8)         //Backspace(有的终端发127,有的发8)
-      delete_char_before(width);
+      ret = delete_char_before(width);
     else if(ch == KEY_DC)             //Del
-      delete_char_after(width);
+      ret = delete_char_after(width);
     else if(ch == KEY_ENTER || ch == '\n' || ch == '\r')    //Enter
-      insert_newline();
+      ret = insert_newline();
     else if(ch >=32 && ch < 256 && ch != 127)     //可打印字符
-      insert_char(ch, width);
+      ret = insert_char(ch, width);
     else                              //方向键
       move_cursor(ch, width);
+      
+    if(ret != 0)                      //编辑未成功（内存不足）（后续有其他错误再修改）
+      show_message("内存不足，此次修改未生效");
 }
