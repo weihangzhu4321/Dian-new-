@@ -105,7 +105,7 @@ int editor(const char *filename)
         {
           if(modified == 0 || asking != 0)    //无未保存的修改，或已经提示过，退出
             break;
-          show_message("文件未保存，再按一次 Crtl+Q 强制退出");
+          show_message("文件未保存，再按一次 Ctrl+Q 强制退出");
           asking = 1;           //再按一次才退出
         }
         else if(ch == 19)         //19为Crtl+S的ASCII码，保存文件
@@ -195,6 +195,8 @@ int load_file(const char *filename)
       }
   
     } //while结束
+    if(ferror(fp))                    //读到一半出错
+    { free(buf); fclose(fp); return -1;}
     if(failed) { free(buf); fclose(fp); return -1; }    //写入成功审查
     
     if(len > 0)                  //文件最后一个字符不是换行时，最后一段写入
@@ -242,8 +244,10 @@ int save_file(const char *filename)
       }
     }//for结束
     
-    fclose(fp);
-    modified = 0;
+    if(fclose(fp) != 0)     //fclose失败
+      return -1;
+      
+    modified = 0;           //保存成功
     return 0;
 }
 
@@ -297,15 +301,16 @@ void draw_status(int max_y, int max_x, const char *filename)
     if(max_y < 2)
       return;                   //屏幕太小，不放状态栏
     
-    len = snprintf(buf, sizeof(buf), "%s | %s",
+    if(message[0] != '\0')      //先写提示，保证效果
+      len = snprintf(buf, sizeof(buf), "%s | ", message);
+    if(len >= 0 && len < (int)sizeof(buf))
+      len += snprintf(buf + len, sizeof(buf) - (size_t)len, "%s | %s",
                 filename ? filename : "(无文件名)",  editor_state);   //len为前两个状态的字符长度
     if(modified && len > 0 && len < (int)sizeof(buf))       //有未保存的修改
       len += snprintf(buf + len, sizeof(buf) - (size_t)len, " | Modified");
     if(len > 0 && len < (int)sizeof(buf))                   //光标所在行列
       len += snprintf(buf + len, sizeof(buf) - (size_t)len, " | %d:%d", 
                 cur_y + 1, cur_x + 1);      //暂时设为展示文本行列，而非屏幕行列（后有需求可更改）
-    if(len > 0 && len < (int)sizeof(buf) && message[0] != '\0') //有提示信息
-      snprintf(buf + len, sizeof(buf) - (size_t)len, " | %s", message);
     
     attron(A_REVERSE);            //反色显示，和正文区分开
     mvhline(row, 0, ' ', max_x - 1);      //先把这一层铺满（最后一列依旧不写）
